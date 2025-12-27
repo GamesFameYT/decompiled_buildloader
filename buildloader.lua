@@ -2,7 +2,6 @@
 -- version: lua51
 
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
 if not LocalPlayer.Character then
@@ -14,14 +13,17 @@ local Terminal = loadstring(
     game:HttpGet("https://raw.githubusercontent.com/SkireScripts/F3X-Panel/main/Terminal.lua")
 )()
 
--- MAIN MODULE
 return {
     LoadBuild = function(_, buildTable, SyncAPI)
-        -- UI
-        local window = Terminal:Window("Build Loader v1.3 (Fixed)")
-        window:Log({ Color = Color3.new(1,1,1), Content = "Starting build loader..." })
+        ------------------------------------------------------------
+        -- UI INIT
+        ------------------------------------------------------------
+        local window = Terminal:Window("Build Loader v1.3 (Stable)")
+        window:Log({ Color = Color3.new(1,1,1), Content = "Initializing..." })
 
-        -- SAFETY CHECK
+        ------------------------------------------------------------
+        -- SYNCAPI VALIDATION
+        ------------------------------------------------------------
         local ok = pcall(function()
             SyncAPI:InvokeServer("GetSelection")
         end)
@@ -29,18 +31,21 @@ return {
         if not ok then
             window:Log({
                 Color = Color3.fromRGB(255, 65, 65),
-                Content = "[FATAL] SyncAPI exists but is blocked by server."
+                Content = "[FATAL] SyncAPI blocked or invalid."
             })
             window:Complete()
             return
         end
 
         ------------------------------------------------------------
-        -- UTILS
+        -- UTIL FUNCTIONS (NIL-SAFE)
         ------------------------------------------------------------
+        local function getSelection()
+            return SyncAPI:InvokeServer("GetSelection") or {}
+        end
 
         local function getSelectionSet()
-            local sel = SyncAPI:InvokeServer("GetSelection")
+            local sel = getSelection()
             local set = {}
             for _, p in ipairs(sel) do
                 set[p] = true
@@ -49,27 +54,22 @@ return {
         end
 
         local function getNewParts(beforeSet)
-            local after = SyncAPI:InvokeServer("GetSelection")
+            local after = getSelection()
             local new = {}
-
             for _, p in ipairs(after) do
                 if not beforeSet[p] then
                     table.insert(new, p)
                 end
             end
-
             return new
         end
 
         ------------------------------------------------------------
-        -- CREATE PARTS (SAFE)
+        -- COUNT PARTS
         ------------------------------------------------------------
-
-        local createdParts = {}
         local total = 0
-
         for _ in pairs(buildTable) do
-            total = total + 1
+            total += 1
         end
 
         local done = 0
@@ -77,6 +77,11 @@ return {
             Color = Color3.new(1,1,1),
             Content = "Progress: 0%"
         })
+
+        ------------------------------------------------------------
+        -- CREATE PARTS (DETERMINISTIC)
+        ------------------------------------------------------------
+        local createdParts = {}
 
         for index, data in pairs(buildTable) do
             local shape = data.shape
@@ -100,14 +105,13 @@ return {
             if #newParts == 0 then
                 window:Log({
                     Color = Color3.fromRGB(255, 120, 120),
-                    Content = "[WARN] No part created for index " .. tostring(index)
+                    Content = "[WARN] No part created at index " .. tostring(index)
                 })
             else
-                -- F3X sometimes creates more than one; we take the first
                 createdParts[index] = newParts[1]
             end
 
-            done = done + 1
+            done += 1
             progressLog:Edit({
                 Color = progressLog:GetColor(),
                 Content = ("Progress: %d%%"):format(math.floor(done / total * 100))
@@ -115,9 +119,8 @@ return {
         end
 
         ------------------------------------------------------------
-        -- PROPERTY SYNC (SAFE, NIL-PROOF)
+        -- PROPERTY COLLECTION
         ------------------------------------------------------------
-
         window:Log({ Color = Color3.new(1,1,1), Content = "Applying properties..." })
 
         local ops = {
@@ -228,7 +231,6 @@ return {
         ------------------------------------------------------------
         -- EXECUTE SYNC
         ------------------------------------------------------------
-
         pcall(function()
             SyncAPI:InvokeServer("SyncColor", ops.Colors)
             SyncAPI:InvokeServer("SyncResize", ops.Resize)
