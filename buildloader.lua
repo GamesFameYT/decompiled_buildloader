@@ -3,6 +3,7 @@
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
+local Workspace = game:GetService("Workspace")
 
 if not LocalPlayer.Character then
     LocalPlayer.CharacterAdded:Wait()
@@ -18,11 +19,11 @@ return {
         ------------------------------------------------------------
         -- UI INIT
         ------------------------------------------------------------
-        local window = Terminal:Window("Build Loader v1.3 (Stable)")
+        local window = Terminal:Window("Build Loader v1.3 (Fast)")
         window:Log({ Color = Color3.new(1,1,1), Content = "Initializing..." })
 
         ------------------------------------------------------------
-        -- SYNCAPI VALIDATION
+        -- SYNCAPI CHECK
         ------------------------------------------------------------
         local ok = pcall(function()
             SyncAPI:InvokeServer("GetSelection")
@@ -38,88 +39,82 @@ return {
         end
 
         ------------------------------------------------------------
-        -- UTIL FUNCTIONS (NIL-SAFE)
-        ------------------------------------------------------------
-        local function getSelection()
-            return SyncAPI:InvokeServer("GetSelection") or {}
-        end
-
-        local function getSelectionSet()
-            local sel = getSelection()
-            local set = {}
-            for _, p in ipairs(sel) do
-                set[p] = true
-            end
-            return sel, set
-        end
-
-        local function getNewParts(beforeSet)
-            local after = getSelection()
-            local new = {}
-            for _, p in ipairs(after) do
-                if not beforeSet[p] then
-                    table.insert(new, p)
-                end
-            end
-            return new
-        end
-
-        ------------------------------------------------------------
         -- COUNT PARTS
         ------------------------------------------------------------
         local total = 0
         for _ in pairs(buildTable) do
-            total += 1
+            total = total + 1
         end
 
-        local done = 0
-        local progressLog = window:Log({
-            Color = Color3.new(1,1,1),
-            Content = "Progress: 0%"
+        window:Log({
+            Color = Color3.fromRGB(200,200,200),
+            Content = "Parts to create: " .. total
         })
 
         ------------------------------------------------------------
-        -- CREATE PARTS (DETERMINISTIC)
+        -- WORKSPACE SNAPSHOT (BEFORE)
         ------------------------------------------------------------
-        local createdParts = {}
+        local before = Workspace:GetChildren()
+        local beforeSet = {}
+        for _, obj in ipairs(before) do
+            beforeSet[obj] = true
+        end
 
-        for index, data in pairs(buildTable) do
+        ------------------------------------------------------------
+        -- BATCH CREATE PARTS (FAST)
+        ------------------------------------------------------------
+        for _, data in pairs(buildTable) do
             local shape = data.shape
             if shape == "Block" then
                 shape = "Normal"
             end
 
-            local _, beforeSet = getSelectionSet()
-
             SyncAPI:InvokeServer(
                 "CreatePart",
                 shape,
                 CFrame.new(unpack(data.cframe)),
-                workspace
+                Workspace
             )
-
-            task.wait()
-
-            local newParts = getNewParts(beforeSet)
-
-            if #newParts == 0 then
-                window:Log({
-                    Color = Color3.fromRGB(255, 120, 120),
-                    Content = "[WARN] No part created at index " .. tostring(index)
-                })
-            else
-                createdParts[index] = newParts[1]
-            end
-
-            done += 1
-            progressLog:Edit({
-                Color = progressLog:GetColor(),
-                Content = ("Progress: %d%%"):format(math.floor(done / total * 100))
-            })
         end
 
+        -- Small yield to let server replicate
+        task.wait(0.15)
+
         ------------------------------------------------------------
-        -- PROPERTY COLLECTION
+        -- WORKSPACE DIFF (AFTER)
+        ------------------------------------------------------------
+        local createdParts = {}
+        local newParts = {}
+
+        for _, obj in ipairs(Workspace:GetChildren()) do
+            if not beforeSet[obj] and obj:IsA("BasePart") then
+                table.insert(newParts, obj)
+            end
+        end
+
+        if #newParts == 0 then
+            window:Log({
+                Color = Color3.fromRGB(255, 65, 65),
+                Content = "[FATAL] No parts detected. Server likely blocks F3X."
+            })
+            window:Complete()
+            return
+        end
+
+        -- Map parts 1:1 in creation order
+        local i = 1
+        for index in pairs(buildTable) do
+            createdParts[index] = newParts[i]
+            i = i + 1
+        end
+
+        window:Log({
+            Color = Color3.fromRGB(84, 255, 84),
+            Content = "Created " .. #newParts .. " parts."
+        })
+
+        ------------------------------------------------------------
+        -- PROPERTY COLLECTION (BATCHED)
         ------------------------------------------------------------
         window:Log({ Color = Color3.new(1,1,1), Content = "Applying properties..." })
 
@@ -140,14 +135,7 @@ return {
 
         for index, data in pairs(buildTable) do
             local part = createdParts[index]
-
-            if not part then
-                window:Log({
-                    Color = Color3.fromRGB(255, 65, 65),
-                    Content = "[SKIP] Missing part at index " .. tostring(index)
-                })
-                continue
-            end
+            if not part then continue end
 
             ops.Colors[#ops.Colors+1] = {
                 Part = part,
@@ -229,7 +217,7 @@ return {
         end
 
         ------------------------------------------------------------
-        -- EXECUTE SYNC
+        -- EXECUTE SYNC (ONE PASS)
         ------------------------------------------------------------
         pcall(function()
             SyncAPI:InvokeServer("SyncColor", ops.Colors)
@@ -246,11 +234,13 @@ return {
             SyncAPI:InvokeServer("SyncMesh", ops.SyncMesh)
         end)
 
+        ------------------------------------------------------------
+        -- DONE
+        ------------------------------------------------------------
         window:Log({
             Color = Color3.fromRGB(84, 255, 84),
-            Content = "Build completed successfully."
+            Content = "Build completed successfully (fast mode)."
         })
-
         window:Complete()
     end
 }
