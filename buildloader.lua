@@ -19,8 +19,8 @@ return {
         ------------------------------------------------------------
         -- UI INIT
         ------------------------------------------------------------
-        local window = Terminal:Window("Build Loader v1.3 (Lightning)")
-        window:Log({ Color = Color3.new(1,1,1), Content = "Initializing (bulk mode)..." })
+        local window = Terminal:Window("Build Loader v1.3 (No Placeholder / Lightning)")
+        window:Log({ Color = Color3.new(1,1,1), Content = "Initializing..." })
 
         ------------------------------------------------------------
         -- SYNCAPI CHECK
@@ -47,92 +47,36 @@ return {
             window:Complete()
             return
         end
-        window:Log({ Color = Color3.fromRGB(200,200,200), Content = "Parts: "..total })
+        window:Log({ Color = Color3.fromRGB(200,200,200), Content = "Parts to build: "..total })
 
         ------------------------------------------------------------
-        -- CREATE ONE PLACEHOLDER (OFF-MAP)
-        ------------------------------------------------------------
-        local placeholderCF = CFrame.new(0, 10000, 0)
-        SyncAPI:InvokeServer("CreatePart", "Normal", placeholderCF, Workspace)
-
-        -- tiny yield to ensure replication of the placeholder
-        task.wait(0.05)
-
-        ------------------------------------------------------------
-        -- GET THE PLACEHOLDER VIA WORKSPACE DIFF
-        ------------------------------------------------------------
-        local before = {}
-        for _, o in ipairs(Workspace:GetChildren()) do before[o] = true end
-
-        -- Force a benign selection change so Clone path is stable on some forks
-        pcall(function() SyncAPI:InvokeServer("GetSelection") end)
-
-        -- Snapshot after creating placeholder
-        local placeholder
-        for _, o in ipairs(Workspace:GetChildren()) do
-            if not before[o] and o:IsA("BasePart") then
-                placeholder = o
-                break
-            end
-        end
-
-        if not placeholder then
-            window:Log({
-                Color = Color3.fromRGB(255,65,65),
-                Content = "[FATAL] Failed to resolve placeholder part."
-            })
-            window:Complete()
-            return
-        end
-
-        ------------------------------------------------------------
-        -- BULK CLONE (ONE CALL)
-        ------------------------------------------------------------
-        -- Build an array of the placeholder repeated N times
-        local clones = {}
-        for i = 1, total do
-            clones[i] = placeholder
-        end
-
-        -- Snapshot before clone to diff new parts
-        local beforeClone = {}
-        for _, o in ipairs(Workspace:GetChildren()) do beforeClone[o] = true end
-
-        -- ONE SERVER CALL
-        SyncAPI:InvokeServer("Clone", clones, Workspace)
-
-        -- minimal yield for replication
-        task.wait(0.05)
-
-        ------------------------------------------------------------
-        -- DIFF TO GET ALL NEW PARTS (FAST)
+        -- BATCH CREATE PARTS DIRECTLY AT TARGET CFRAME
         ------------------------------------------------------------
         local createdParts = {}
-        for _, o in ipairs(Workspace:GetChildren()) do
-            if not beforeClone[o] and o:IsA("BasePart") then
-                createdParts[#createdParts+1] = o
+
+        for index, data in pairs(buildTable) do
+            local shape = (data.shape == "Block") and "Normal" or data.shape
+            local part = nil
+
+            local success, result = pcall(function()
+                -- Directly create part at target CFrame
+                part = SyncAPI:InvokeServer("CreatePart", shape, CFrame.new(unpack(data.cframe)), Workspace)
+            end)
+
+            if success and part then
+                createdParts[index] = part
+            else
+                window:Log({
+                    Color = Color3.fromRGB(255,120,120),
+                    Content = "[WARN] Failed to create part at index "..tostring(index)
+                })
             end
         end
 
-        if #createdParts < total then
-            window:Log({
-                Color = Color3.fromRGB(255,120,120),
-                Content = "[WARN] Expected "..total.." parts, detected "..#createdParts..". Continuing."
-            })
-        end
-
-        -- Map parts to build indices in insertion order
-        local ordered = {}
-        local i = 1
-        for idx in pairs(buildTable) do
-            ordered[idx] = createdParts[i]
-            i = i + 1
-        end
-
         ------------------------------------------------------------
-        -- PREPARE BATCH PROPERTY OPS (NO LOOPS WITH REMOTES)
+        -- BATCH PROPERTY SYNC
         ------------------------------------------------------------
-        window:Log({ Color = Color3.new(1,1,1), Content = "Applying properties (batched)..." })
+        window:Log({ Color = Color3.new(1,1,1), Content = "Applying properties..." })
 
         local ops = {
             Colors = {},
@@ -149,8 +93,8 @@ return {
             SyncMesh = {},
         }
 
-        for idx, data in pairs(buildTable) do
-            local part = ordered[idx]
+        for index, data in pairs(buildTable) do
+            local part = createdParts[index]
             if not part then continue end
 
             ops.Colors[#ops.Colors+1] = {
@@ -229,7 +173,7 @@ return {
         end
 
         ------------------------------------------------------------
-        -- EXECUTE BATCH SYNC (MINIMUM CALLS)
+        -- EXECUTE BATCH SYNC
         ------------------------------------------------------------
         pcall(function()
             if #ops.Colors     > 0 then SyncAPI:InvokeServer("SyncColor",     ops.Colors)     end
@@ -247,18 +191,11 @@ return {
         end)
 
         ------------------------------------------------------------
-        -- CLEANUP PLACEHOLDER (OPTIONAL)
-        ------------------------------------------------------------
-        pcall(function()
-            SyncAPI:InvokeServer("Remove", { placeholder })
-        end)
-
-        ------------------------------------------------------------
-        -- DONE
+        -- COMPLETE
         ------------------------------------------------------------
         window:Log({
             Color = Color3.fromRGB(84,255,84),
-            Content = "Build complete (lightning mode)."
+            Content = "Build complete (no placeholder, lightning fast)."
         })
         window:Complete()
     end
