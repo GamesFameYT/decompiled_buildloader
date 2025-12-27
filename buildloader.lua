@@ -52,7 +52,7 @@ return {
         ------------------------------------------------------------
         -- CREATE ONE PLACEHOLDER (OFF-MAP)
         ------------------------------------------------------------
-        local placeholderCF = CFrame.new(0, -10000, 0)
+        local placeholderCF = CFrame.new(0, 10000, 0)
         SyncAPI:InvokeServer("CreatePart", "Normal", placeholderCF, Workspace)
 
         -- tiny yield to ensure replication of the placeholder
