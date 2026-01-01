@@ -275,9 +275,10 @@ return {
         end
         
         -- EXECUTE BATCH SYNC WITH ERROR HANDLING
-        local function safeSync(operation, funcName, ...)
+        -- Fixed: Removed varargs from safeSync function
+        local function safeSync(operation, funcName, args)
             local success, err = pcall(function()
-                SyncAPI:InvokeServer(funcName, ...)
+                SyncAPI:InvokeServer(funcName, args)
             end)
             if not success then
                 window:Log({ 
