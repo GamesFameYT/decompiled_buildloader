@@ -60,31 +60,103 @@ return {
             
             local success, result = pcall(function()
                 if partType == "UnionOperation" then
-                    -- Correct union creation
-                    part = SyncAPI:InvokeServer("CreateUnion", data.unionData or {}, Workspace)
-                    if part then
-                        part.CFrame = CFrame.new(unpack(data.cframe or {0,0,0}))
+                    -- Union creation with proper error handling
+                    local unionData = data.unionData or data.AssetId
+                    
+                    if not unionData then
+                        window:Log({ 
+                            Color = Color3.fromRGB(255,165,0), 
+                            Content = "[WARN] Union at index "..index.." missing union data, creating as Part instead" 
+                        })
+                        
+                        -- Fallback to Part
+                        part = SyncAPI:InvokeServer("CreatePart", "Normal", 
+                            CFrame.new(unpack(data.cframe or {0,0,0})), Workspace)
+                        
+                        return
                     end
                     
-                elseif partType == "MeshPart" or (data.mesh and data.mesh.meshtype) then
-                    -- Correct mesh part creation
+                    -- Try to create union
+                    local unionSuccess, unionResult = pcall(function()
+                        return SyncAPI:InvokeServer("CreateUnion", unionData, Workspace)
+                    end)
+                    
+                    if unionSuccess and unionResult then
+                        part = unionResult
+                        if data.cframe then
+                            part.CFrame = CFrame.new(unpack(data.cframe))
+                        end
+                    else
+                        window:Log({ 
+                            Color = Color3.fromRGB(255,165,0), 
+                            Content = "[WARN] Unable to create union element at index "..index..", creating as Part instead" 
+                        })
+                        
+                        -- Fallback to Part
+                        part = SyncAPI:InvokeServer("CreatePart", "Normal", 
+                            CFrame.new(unpack(data.cframe or {0,0,0})), Workspace)
+                    end
+                    
+                elseif partType == "MeshPart" or (data.mesh and (data.mesh.meshid or data.mesh.MeshId)) then
+                    -- MeshPart creation with proper data extraction
                     local meshData = data.mesh or {}
                     local cf = data.cframe or {0,0,0}
                     
-                    -- Ensure proper mesh data structure
+                    -- Extract mesh properties
+                    local meshId = meshData.meshid or meshData.MeshId or ""
+                    local textureId = meshData.texture or meshData.TextureId or ""
+                    local meshType = meshData.meshtype or meshData.MeshType or Enum.MeshType.FileMesh
+                    local scale = meshData.scale or meshData.Scale or {1,1,1}
+                    local offset = meshData.offset or meshData.Offset or {0,0,0}
+                    local vertexColor = meshData.vertexcolor or meshData.VertexColor or {1,1,1}
+                    
+                    -- Prepare mesh creation data
                     local createData = {
-                        meshtype = meshData.meshtype or Enum.MeshType.Head,
-                        scale = meshData.scale or {1,1,1},
-                        offset = meshData.offset or {0,0,0},
-                        vertexcolor = meshData.vertexcolor or {1,1,1},
-                        texture = meshData.texture or ""
+                        meshtype = meshType,
+                        scale = scale,
+                        offset = offset,
+                        vertexcolor = vertexColor,
+                        texture = textureId
                     }
                     
-                    if meshData.meshtype == Enum.MeshType.FileMesh and meshData.meshid then
-                        createData.meshid = meshData.meshid
+                    -- Add MeshId if it's a FileMesh
+                    if meshType == Enum.MeshType.FileMesh or meshType == "FileMesh" then
+                        createData.meshid = meshId
                     end
                     
-                    part = SyncAPI:InvokeServer("CreateMeshPart", createData, CFrame.new(unpack(cf)), Workspace)
+                    -- Try to create MeshPart
+                    local meshSuccess, meshResult = pcall(function()
+                        return SyncAPI:InvokeServer("CreateMeshPart", createData, CFrame.new(unpack(cf)), Workspace)
+                    end)
+                    
+                    if meshSuccess and meshResult then
+                        part = meshResult
+                    else
+                        window:Log({ 
+                            Color = Color3.fromRGB(255,165,0), 
+                            Content = "[WARN] Unable to create mesh at index "..index..", creating as Part with SpecialMesh instead" 
+                        })
+                        
+                        -- Fallback: Create Part with SpecialMesh
+                        part = SyncAPI:InvokeServer("CreatePart", "Normal", 
+                            CFrame.new(unpack(cf)), Workspace)
+                        
+                        if part then
+                            -- Add mesh to the part
+                            pcall(function()
+                                SyncAPI:InvokeServer("CreateMeshes", {{Part = part}})
+                                SyncAPI:InvokeServer("SyncMesh", {{
+                                    Part = part,
+                                    MeshType = meshType,
+                                    MeshId = meshId,
+                                    TextureId = textureId,
+                                    Scale = Vector3.new(unpack(scale)),
+                                    Offset = Vector3.new(unpack(offset)),
+                                    VertexColor = Vector3.new(unpack(vertexColor))
+                                }})
+                            end)
+                        end
+                    end
                     
                 elseif partType == "Light" then
                     -- Light creation
@@ -183,10 +255,10 @@ return {
                 end
                 
                 -- Material properties
-                if data.texture or data.transparency or data.reflectance then
+                if data.texture or data.material or data.transparency or data.reflectance then
                     table.insert(ops.Material, {
                         Part = part,
-                        Material = data.texture or Enum.Material.Plastic,
+                        Material = data.material or data.texture or Enum.Material.Plastic,
                         Transparency = data.transparency or 0,
                         Reflectance = data.reflectance or 0
                     })
@@ -240,23 +312,25 @@ return {
                     })
                 end
                 
-                -- Meshes
-                if data.mesh then
+                -- Meshes (only for regular parts with SpecialMesh, not MeshParts)
+                if data.mesh and not part:IsA("MeshPart") then
                     -- Create mesh
                     table.insert(ops.Mesh, { Part = part })
                     
                     -- Sync mesh properties
+                    local meshData = data.mesh
                     local meshOp = {
                         Part = part,
-                        TextureId = data.mesh.texture or "",
-                        VertexColor = Vector3.new(unpack(data.mesh.vertexcolor or {1,1,1})),
-                        MeshType = data.mesh.meshtype or Enum.MeshType.Head,
-                        Scale = Vector3.new(unpack(data.mesh.scale or {1,1,1})),
-                        Offset = Vector3.new(unpack(data.mesh.offset or {0,0,0})),
+                        TextureId = meshData.texture or meshData.TextureId or "",
+                        VertexColor = Vector3.new(unpack(meshData.vertexcolor or meshData.VertexColor or {1,1,1})),
+                        MeshType = meshData.meshtype or meshData.MeshType or Enum.MeshType.Head,
+                        Scale = Vector3.new(unpack(meshData.scale or meshData.Scale or {1,1,1})),
+                        Offset = Vector3.new(unpack(meshData.offset or meshData.Offset or {0,0,0})),
                     }
                     
-                    if data.mesh.meshtype == Enum.MeshType.FileMesh and data.mesh.meshid then
-                        meshOp.MeshId = data.mesh.meshid
+                    local meshId = meshData.meshid or meshData.MeshId
+                    if meshId and (meshOp.MeshType == Enum.MeshType.FileMesh or meshOp.MeshType == "FileMesh") then
+                        meshOp.MeshId = meshId
                     end
                     
                     table.insert(ops.SyncMesh, meshOp)
@@ -275,7 +349,6 @@ return {
         end
         
         -- EXECUTE BATCH SYNC WITH ERROR HANDLING
-        -- Fixed: Removed varargs from safeSync function
         local function safeSync(operation, funcName, args)
             local success, err = pcall(function()
                 SyncAPI:InvokeServer(funcName, args)
