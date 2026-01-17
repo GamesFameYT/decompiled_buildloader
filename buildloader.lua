@@ -15,7 +15,7 @@ local Terminal = loadstring(
 return {
     LoadBuild = function(_, buildTable, SyncAPI)
         local window = Terminal:Window("ziec's scp: rp build loader")
-        window:Log({ Color = Color3.new(1,1,1), Content = "Attempting to initalize." })
+        window:Log({ Color = Color3.new(1,1,1), Content = "Initalizing . . ." })
         
         -- SYNCAPI CHECK
         local ok = pcall(function()
@@ -23,42 +23,43 @@ return {
         end)
         
         if not ok then
-            window:Log({ Color = Color3.fromRGB(255,65,65), Content = "[FATAL ERROR] SyncAPI blocked or invalid, do you have Building Tools?" })
+            window:Log({ Color = Color3.fromRGB(255,65,65), Content = "[FATAL ERROR] SyncAPI invalid, do you have Building Tools?" })
             window:Complete()
             return
         end
-        
+
+        window:Log({ Color = Color3.new(1,1,1), Content = "[INFO] Reading build data . . ." })
+        task.wait(0.6)
         -- COUNT PARTS
-        local total = 0
-        for _ in pairs(buildTable) do
-            total = total + 1
-        end
+        local total = #buildTable
         
         if total == 0 then
-            window:Log({ Color = Color3.fromRGB(255,120,120), Content = "[WARN] Nothing to build." })
+            window:Log({ Color = Color3.fromRGB(255,65,65), Content = "[ERR] The build data is incorrect or does not have any valid elements." })
             window:Complete()
             return
         end
         
-        window:Log({ Color = Color3.fromRGB(200,200,200), Content = "[INFO] Parts to build: "..total })
+        window:Log({ Color = Color3.fromRGB(200,200,200), Content = "[INFO] Parts to place: "..total })
         
         -- CREATE PARTS, MESHES, UNIONS, LIGHTS WITH PROPER ORDERING
         local createdParts = {}
-        local orderedIndices = {}
         
-        -- First pass: collect all indices
-        for index in pairs(buildTable) do
-            table.insert(orderedIndices, index)
-        end
-        table.sort(orderedIndices)
-        
-        -- Second pass: create parts in order
-        for _, index in ipairs(orderedIndices) do
-            local data = buildTable[index]
+        -- Process each part in order
+        for index, data in ipairs(buildTable) do
             local part = nil
             local partType = data.type or data.shape or "Block"
             
             local success, result = pcall(function()
+                -- Determine CFrame from either position or cframe data
+                local cf
+                if data.cframe then
+                    cf = CFrame.new(unpack(data.cframe))
+                elseif data.position then
+                    cf = CFrame.new(unpack(data.position))
+                else
+                    cf = CFrame.new(0, 0, 0)
+                end
+                
                 if partType == "UnionOperation" then
                     -- Union creation with proper error handling
                     local unionData = data.unionData or data.AssetId
@@ -66,12 +67,11 @@ return {
                     if not unionData then
                         window:Log({ 
                             Color = Color3.fromRGB(255,165,0), 
-                            Content = "[WARN] Union at index "..index.." missing union data, creating as Part instead" 
+                            Content = "[WARN] Union at index "..index.." was missing the correct union data, it has been created as a Part instead" 
                         })
                         
                         -- Fallback to Part
-                        part = SyncAPI:InvokeServer("CreatePart", "Normal", 
-                            CFrame.new(unpack(data.cframe or {0,0,0})), Workspace)
+                        part = SyncAPI:InvokeServer("CreatePart", "Normal", cf, Workspace)
                         
                         return
                     end
@@ -83,50 +83,67 @@ return {
                     
                     if unionSuccess and unionResult then
                         part = unionResult
-                        if data.cframe then
-                            part.CFrame = CFrame.new(unpack(data.cframe))
-                        end
+                        part.CFrame = cf
                     else
                         window:Log({ 
                             Color = Color3.fromRGB(255,165,0), 
-                            Content = "[WARN] Unable to create union element at index "..index..", creating as Part instead" 
+                            Content = "[WARN] Failed to create union element at index "..index..", A part was created instead." 
                         })
                         
                         -- Fallback to Part
-                        part = SyncAPI:InvokeServer("CreatePart", "Normal", 
-                            CFrame.new(unpack(data.cframe or {0,0,0})), Workspace)
+                        part = SyncAPI:InvokeServer("CreatePart", "Normal", cf, Workspace)
                     end
                     
-                elseif partType == "MeshPart" or (data.mesh and (data.mesh.meshid or data.mesh.MeshId)) then
+                elseif partType == "MeshPart" or (data.mesh and data.mesh.meshid and data.mesh.meshid ~= "") then
                     -- MeshPart creation with proper data extraction
                     local meshData = data.mesh or {}
-                    local cf = data.cframe or {0,0,0}
                     
                     -- Extract mesh properties
                     local meshId = meshData.meshid or meshData.MeshId or ""
                     local textureId = meshData.texture or meshData.TextureId or ""
-                    local meshType = meshData.meshtype or meshData.MeshType or Enum.MeshType.FileMesh
                     local scale = meshData.scale or meshData.Scale or {1,1,1}
                     local offset = meshData.offset or meshData.Offset or {0,0,0}
                     local vertexColor = meshData.vertexcolor or meshData.VertexColor or {1,1,1}
                     
-                    -- Prepare mesh creation data
-                    local createData = {
-                        meshtype = meshType,
-                        scale = scale,
-                        offset = offset,
-                        vertexcolor = vertexColor,
-                        texture = textureId
-                    }
-                    
-                    -- Add MeshId if it's a FileMesh
-                    if meshType == Enum.MeshType.FileMesh or meshType == "FileMesh" then
-                        createData.meshid = meshId
-                    end
-                    
-                    -- Try to create MeshPart
+                    -- Try to create MeshPart using F3X's CreateMeshPart
                     local meshSuccess, meshResult = pcall(function()
-                        return SyncAPI:InvokeServer("CreateMeshPart", createData, CFrame.new(unpack(cf)), Workspace)
+                        -- For MeshParts from the converter, we need to handle them specially
+                        if partType == "MeshPart" then
+                            -- Create a regular part first
+                            local tempPart = SyncAPI:InvokeServer("CreatePart", "Normal", cf, Workspace)
+                            
+                            if tempPart then
+                                -- Add SpecialMesh to it
+                                local meshOp = {
+                                    Part = tempPart,
+                                    MeshType = Enum.MeshType.FileMesh,
+                                    MeshId = meshId,
+                                    TextureId = textureId,
+                                    Scale = Vector3.new(unpack(scale)),
+                                    Offset = Vector3.new(unpack(offset)),
+                                    VertexColor = Vector3.new(unpack(vertexColor))
+                                }
+                                
+                                -- Create mesh
+                                SyncAPI:InvokeServer("CreateMeshes", {{Part = tempPart}})
+                                -- Sync mesh properties
+                                SyncAPI:InvokeServer("SyncMesh", {meshOp})
+                                
+                                return tempPart
+                            end
+                        else
+                            -- Regular mesh handling
+                            local createData = {
+                                meshtype = Enum.MeshType.FileMesh,
+                                meshid = meshId,
+                                texture = textureId,
+                                scale = scale,
+                                offset = offset,
+                                vertexcolor = vertexColor
+                            }
+                            
+                            return SyncAPI:InvokeServer("CreateMeshPart", createData, cf, Workspace)
+                        end
                     end)
                     
                     if meshSuccess and meshResult then
@@ -134,20 +151,19 @@ return {
                     else
                         window:Log({ 
                             Color = Color3.fromRGB(255,165,0), 
-                            Content = "[WARN] Unable to create mesh at index "..index..", creating as Part with SpecialMesh instead" 
+                            Content = "[WARN] Unable to create filemesh at index "..index..", it has been replaced with SpecialMesh" 
                         })
                         
                         -- Fallback: Create Part with SpecialMesh
-                        part = SyncAPI:InvokeServer("CreatePart", "Normal", 
-                            CFrame.new(unpack(cf)), Workspace)
+                        part = SyncAPI:InvokeServer("CreatePart", "Normal", cf, Workspace)
                         
-                        if part then
+                        if part and meshId ~= "" then
                             -- Add mesh to the part
                             pcall(function()
                                 SyncAPI:InvokeServer("CreateMeshes", {{Part = part}})
                                 SyncAPI:InvokeServer("SyncMesh", {{
                                     Part = part,
-                                    MeshType = meshType,
+                                    MeshType = Enum.MeshType.FileMesh,
                                     MeshId = meshId,
                                     TextureId = textureId,
                                     Scale = Vector3.new(unpack(scale)),
@@ -158,40 +174,24 @@ return {
                         end
                     end
                     
-                elseif partType == "Light" then
-                    -- Light creation
-                    local lightType = data.lightType or "PointLight"
-                    if lightType == "SpotLight" then
-                        part = Instance.new("SpotLight")
-                    elseif lightType == "SurfaceLight" then
-                        part = Instance.new("SurfaceLight")
-                    else
-                        part = Instance.new("PointLight")
-                    end
-                    
-                    part.Parent = Workspace
-                    part.CFrame = CFrame.new(unpack(data.cframe or {0,0,0}))
-                    part.Color = Color3.fromRGB(unpack(data.color or {255,255,255}))
-                    part.Brightness = data.brightness or 1
-                    part.Range = data.range or 15
-                    part.Shadows = data.shadows or false
-                    
-                    if lightType == "SpotLight" then
-                        part.Angle = data.angle or 45
-                        part.Face = Enum.NormalId[data.face or "Front"] or Enum.NormalId.Front
-                    end
-                    
                 else
                     -- Regular part creation
                     local shapeType = "Normal"
-                    if partType == "Wedge" then shapeType = "Wedge"
-                    elseif partType == "CornerWedge" then shapeType = "CornerWedge"
-                    elseif partType == "Cylinder" then shapeType = "Cylinder"
-                    elseif partType == "Ball" then shapeType = "Ball"
+                    local shape = data.shape or "Block"
+                    
+                    if shape == "Wedge" then 
+                        shapeType = "Wedge"
+                    elseif shape == "Corner" or shape == "CornerWedge" then 
+                        shapeType = "CornerWedge"
+                    elseif shape == "Cylinder" then 
+                        shapeType = "Cylinder"
+                    elseif shape == "Ball" or shape == "Sphere" then 
+                        shapeType = "Ball"
+                    elseif shape == "Spawn" or shape == "SpawnLocation" then
+                        shapeType = "Normal" -- Spawn is just a normal block
                     end
                     
-                    part = SyncAPI:InvokeServer("CreatePart", shapeType, 
-                        CFrame.new(unpack(data.cframe or {0,0,0})), Workspace)
+                    part = SyncAPI:InvokeServer("CreatePart", shapeType, cf, Workspace)
                 end
             end)
             
@@ -199,12 +199,12 @@ return {
                 createdParts[index] = part
                 window:Log({ 
                     Color = Color3.fromRGB(120,255,120), 
-                    Content = "Element created: "..partType.." (#"..index..")" 
+                    Content = "Created element part "..partType.." (#"..index..")" 
                 })
             else
                 window:Log({ 
                     Color = Color3.fromRGB(255,120,120), 
-                    Content = "[WARNING] Failed to create "..partType.." at index "..tostring(index)..": "..tostring(result) 
+                    Content = "[WARNING] Failed to create part "..partType.." at index "..tostring(index)..": "..tostring(result) 
                 })
             end
             
@@ -212,7 +212,7 @@ return {
         end
         
         -- BATCH PROPERTY SYNC WITH CORRECT DATA STRUCTURES
-        window:Log({ Color = Color3.new(1,1,1), Content = "[INFO] Attempting to apply properties..." })
+        window:Log({ Color = Color3.new(1,1,1), Content = "[INFO] applying properties to created elements..." })
         
         local ops = {
             Colors = {},
@@ -226,16 +226,15 @@ return {
             Decal = {},
             SyncDecal = {},
             Mesh = {},
-            SyncMesh = {},
-            Lights = {}
+            SyncMesh = {}
         }
         
-        for index, data in pairs(buildTable) do
+        for index, data in ipairs(buildTable) do
             local part = createdParts[index]
             if not part then continue end
             
-            -- Handle BaseParts, MeshParts, and UnionOperations
-            if part:IsA("BasePart") or part:IsA("MeshPart") or part:IsA("UnionOperation") then
+            -- Handle all BaseParts
+            if part:IsA("BasePart") then
                 -- Color
                 if data.color then
                     table.insert(ops.Colors, {
@@ -247,27 +246,56 @@ return {
                 
                 -- Size/Resize
                 if data.size then
+                    local cf
+                    if data.cframe then
+                        cf = CFrame.new(unpack(data.cframe))
+                    elseif data.position then
+                        cf = CFrame.new(unpack(data.position))
+                    else
+                        cf = part.CFrame
+                    end
+                    
                     table.insert(ops.Resize, {
                         Part = part,
                         Size = Vector3.new(unpack(data.size)),
-                        CFrame = CFrame.new(unpack(data.cframe or {0,0,0}))
+                        CFrame = cf
                     })
                 end
                 
                 -- Material properties
                 if data.texture or data.material or data.transparency or data.reflectance then
+                    -- Convert texture string to Material enum
+                    local material = Enum.Material.Plastic
+                    if data.texture then
+                        local matName = data.texture
+                        if Enum.Material[matName] then
+                            material = Enum.Material[matName]
+                        end
+                    elseif data.material then
+                        material = data.material
+                    end
+                    
                     table.insert(ops.Material, {
                         Part = part,
-                        Material = data.material or data.texture or Enum.Material.Plastic,
+                        Material = material,
                         Transparency = data.transparency or 0,
                         Reflectance = data.reflectance or 0
                     })
                 end
                 
-                -- Rotation
+                -- Rotation (use CFrame)
+                local cf
+                if data.cframe then
+                    cf = CFrame.new(unpack(data.cframe))
+                elseif data.position then
+                    cf = CFrame.new(unpack(data.position))
+                else
+                    cf = part.CFrame
+                end
+                
                 table.insert(ops.Rotate, {
                     Part = part,
-                    CFrame = CFrame.new(unpack(data.cframe or {0,0,0}))
+                    CFrame = cf
                 })
                 
                 -- Anchor
@@ -277,7 +305,9 @@ return {
                 })
                 
                 -- Locked
-                table.insert(ops.Locked, part)
+                if data.locked ~= false then
+                    table.insert(ops.Locked, part)
+                end
                 
                 -- Collision
                 table.insert(ops.Collision, {
@@ -287,64 +317,71 @@ return {
                 
                 -- Surfaces
                 if data.surface then
-                    table.insert(ops.Surface, {
-                        Part = part,
-                        Surfaces = data.surface
-                    })
+                    local surfaces = {}
+                    for face, surfaceType in pairs(data.surface) do
+                        if Enum.SurfaceType[surfaceType] then
+                            surfaces[face] = Enum.SurfaceType[surfaceType]
+                        end
+                    end
+                    
+                    if next(surfaces) then
+                        table.insert(ops.Surface, {
+                            Part = part,
+                            Surfaces = surfaces
+                        })
+                    end
                 end
                 
                 -- Decals
                 if data.decal then
+                    local face = data.decal.face or "Top"
+                    if type(face) == "string" and face:find("Enum.NormalId") then
+                        face = face:match("%.([^%.]+)$") or "Top"
+                    end
+                    
                     -- Create decal
                     table.insert(ops.Decal, {
                         Part = part,
-                        Face = data.decal.face or "Top",
+                        Face = face,
                         TextureType = "Decal"
                     })
                     
                     -- Sync decal properties
                     table.insert(ops.SyncDecal, {
                         Part = part,
-                        Face = data.decal.face or "Top",
+                        Face = face,
                         Texture = data.decal.texture or "",
                         Transparency = data.decal.transparency or 0,
                         TextureType = "Decal"
                     })
                 end
                 
-                -- Meshes (only for regular parts with SpecialMesh, not MeshParts)
-                if data.mesh and not part:IsA("MeshPart") then
-                    -- Create mesh
+                -- Meshes (only for regular parts with SpecialMesh, not if already handled as MeshPart)
+                if data.mesh and not (data.type == "MeshPart") and not part:FindFirstChildOfClass("SpecialMesh") then
+                    local meshData = data.mesh
+                    
+                    -- Only add mesh if we haven't already during creation
                     table.insert(ops.Mesh, { Part = part })
                     
                     -- Sync mesh properties
-                    local meshData = data.mesh
+                    local meshType = meshData.meshtype or meshData.MeshType or Enum.MeshType.Head
+                    local meshId = meshData.meshid or meshData.MeshId or ""
+                    
                     local meshOp = {
                         Part = part,
                         TextureId = meshData.texture or meshData.TextureId or "",
                         VertexColor = Vector3.new(unpack(meshData.vertexcolor or meshData.VertexColor or {1,1,1})),
-                        MeshType = meshData.meshtype or meshData.MeshType or Enum.MeshType.Head,
+                        MeshType = meshType,
                         Scale = Vector3.new(unpack(meshData.scale or meshData.Scale or {1,1,1})),
                         Offset = Vector3.new(unpack(meshData.offset or meshData.Offset or {0,0,0})),
                     }
                     
-                    local meshId = meshData.meshid or meshData.MeshId
-                    if meshId and (meshOp.MeshType == Enum.MeshType.FileMesh or meshOp.MeshType == "FileMesh") then
+                    if meshId ~= "" and (meshType == Enum.MeshType.FileMesh or meshType == "FileMesh") then
                         meshOp.MeshId = meshId
                     end
                     
                     table.insert(ops.SyncMesh, meshOp)
                 end
-                
-            -- Handle Lights
-            elseif part:IsA("Light") then
-                table.insert(ops.Lights, {
-                    Light = part,
-                    Color = Color3.fromRGB(unpack(data.color or {255,255,255})),
-                    Brightness = data.brightness or 1,
-                    Range = data.range or 15,
-                    Shadows = data.shadows or false
-                })
             end
         end
         
@@ -356,7 +393,7 @@ return {
             if not success then
                 window:Log({ 
                     Color = Color3.fromRGB(255,165,0), 
-                    Content = "[WARNING] Failed operation: "..operation..": "..tostring(err) 
+                    Content = "[WARNING] A operation errored: "..operation..": "..tostring(err) 
                 })
             end
         end
@@ -410,18 +447,9 @@ return {
             safeSync("mesh sync", "SyncMesh", ops.SyncMesh)
         end
         
-        -- Apply light properties (no sync needed - these are local)
-        for _, lightData in pairs(ops.Lights) do
-            local light = lightData.Light
-            light.Color = lightData.Color
-            light.Brightness = lightData.Brightness
-            light.Range = lightData.Range
-            light.Shadows = lightData.Shadows
-        end
-        
         window:Log({ 
             Color = Color3.fromRGB(84,255,84), 
-            Content = "The operation was successfully completed. Created "..#orderedIndices.." elements." 
+            Content = "The operation was successfully completed. Created "..total.." elements." 
         })
         
         window:Complete()
